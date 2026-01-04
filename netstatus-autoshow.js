@@ -1,115 +1,105 @@
 // ==UserScript==
-// @version      1.1
-// @description  哪吒详情页直接展示网络波动卡片 (兼容新版)
-// @author       https://github.com/imhuimie
+// @version      1.2
+// @description  哪吒详情页直接展示网络波动卡片 (兼容新版-修复转圈问题)
+// @author       https://www.nodeseek.com/post-349102-1
 // ==/UserScript==
 
 (function () {
     'use strict';
 
-    // 配置：CSS类名和选择器
-    // 注意：Tailwind 类名可能会变，尽量使用结构性选择器
-    const SELECTORS = {
-        // server-info 容器
-        serverInfo: '.server-info',
-        // 详情页切换按钮所在的 Section (需要隐藏)
-        tabSection: '.server-info > section:nth-of-type(1)', /* 通常是第一个 section */
-        // 详情卡片 (旧版是3,4; 新版通常是 server-info 的直接子元素)
-        // 假设除去第一个 section (tab selector)，剩下的 div 都是内容卡片
-        contentCards: '.server-info > div',
-        // Peak 按钮
-        peakButton: '#Peak'
-    };
+    // 标志位：防止重复点击和死循环
+    let isSetupDone = false;
+    let styleInjected = false;
 
-    let hasClicked = false;
-    let divVisible = false;
+    const SEARCH_INTERVAL = 300; // 轮询检查间隔(ms)
+    
+    // 注入CSS样式：使用 CSS 强制显示内容，比 JS 循环修改 style 更高效且稳定
+    function injectStyles() {
+        if (styleInjected) return;
+        
+        const style = document.createElement('style');
+        style.innerHTML = \`
+            /* 1. 隐藏包含“网络”按钮的 Tab 栏 (通常是第一个 Section) */
+            .server-info > section:first-of-type {
+                display: none !important;
+            }
 
-    // 获取“网络”按钮 (通过文本内容查找，比 nth-child 更稳健)
+            /* 2. 强制显示所有内容卡片 */
+            /* 排除第一个 section (Tab栏)，显示其他所有 section 和 div */
+            .server-info > div,
+            .server-info > section:not(:first-of-type) {
+                display: block !important;
+                visibility: visible !important;
+                opacity: 1 !important;
+            }
+        \`;
+        document.head.appendChild(style);
+        styleInjected = true;
+        console.log('[UserScript] CSS injected');
+    }
+
+    // 查找“网络”按钮
     function getNetworkButton() {
-        const potentialButtons = document.querySelectorAll('.server-info section div');
+        // 查找包含“网络”或“Network”文本的可点击元素
+        const potentialButtons = document.querySelectorAll('.server-info section div.cursor-pointer, .server-info section div[class*="cursor-pointer"]');
         for (const btn of potentialButtons) {
             if (btn.innerText.includes('网络') || btn.innerText.includes('Network')) {
-                // 往往点击的是这个 div 或者它的父级，寻找 cursor-pointer
-                if (btn.classList.contains('cursor-pointer')) return btn;
-                return btn.closest('.cursor-pointer');
+                return btn;
             }
         }
-        // Fallback: 假设是第二个可点击的 tab
-        return document.querySelector('.server-info section div.relative.cursor-pointer:nth-child(2)');
+        return null;
     }
 
-    // 强制显示所有详情卡片 (CPU/内存 和 网络)
-    function forceBothVisible() {
-        const cards = document.querySelectorAll(SELECTORS.contentCards);
-        cards.forEach(card => {
-            // 简单粗暴：所有 server-info 下的 div 直接显示
-            // 排除掉可能是干扰项的元素 (如果有)
-            if (getComputedStyle(card).display === 'none') {
-                card.style.setProperty('display', 'block', 'important');
+    // 尝试点击 Peak 按钮 (独立逻辑，只重试有限次数)
+    function tryClickPeak(maxRetries = 20) {
+        let retries = 0;
+        const peakInterval = setInterval(() => {
+            const peakBtn = document.querySelector('#Peak');
+            if (peakBtn) {
+                peakBtn.click();
+                console.log('[UserScript] Peak button clicked');
+                clearInterval(peakInterval);
+            } else {
+                retries++;
+                if (retries >= maxRetries) clearInterval(peakInterval);
             }
-        });
+        }, 300);
     }
 
-    // 隐藏 Tab 切换栏
-    function hideSection() {
-        const section = document.querySelector(SELECTORS.tabSection);
-        if (section) {
-            section.style.setProperty('display', 'none', 'important');
-        }
-    }
-
-    // 尝试点击“网络”按钮以加载网络图表
-    function tryClickButton() {
-        const btn = getNetworkButton();
-        if (btn && !hasClicked) {
-            console.log('[UserScript] Clicking Network button...');
-            btn.click();
-            hasClicked = true;
-            // 点击后，页面可能会重新渲染部分内容，稍后强制显示
-            setTimeout(forceBothVisible, 500);
-            setTimeout(forceBothVisible, 1500);
-        }
-    }
-
-    // 尝试点击 Peak 按钮 (如果存在)
-    function tryClickPeak(retryCount = 10, interval = 200) {
-        const peakBtn = document.querySelector(SELECTORS.peakButton);
-        if (peakBtn) {
-            peakBtn.click();
-            console.log('[UserScript] Clicked Peak button');
-        } else if (retryCount > 0) {
-            setTimeout(() => tryClickPeak(retryCount - 1, interval), interval);
-        }
-    }
-
-    const observer = new MutationObserver(() => {
-        const cards = document.querySelectorAll(SELECTORS.contentCards);
-        
-        // 只要能找到详情卡片，就认为是加载了
-        const isLoaded = cards.length > 0;
-
-        if (isLoaded) {
-            // 如果还没点击过，且现在可见了
-            if (!hasClicked) {
-                 // 很多时候页面刚加载时只显示了 Detail (CPU/RAM)，Network 是隐藏的或不存在的
-                 // 我们需要点击 Network 按钮来把 Network 图表加载出来
-                 hideSection();
-                 tryClickButton();
-                 setTimeout(() => tryClickPeak(15, 200), 300);
+    // 核心初始化逻辑
+    function initLogic() {
+        // 如果页面没有 server-info，说明可能没加载完或不在详情页
+        if (!document.querySelector('.server-info')) {
+            // 如果之前标记了完成，但现在找不到元素了（比如路由跳转），需要重置标志位
+            if (isSetupDone) {
+                 isSetupDone = false;
+                 console.log('[UserScript] Page reset detected, resetting flags');
             }
+            return;
+        }
+
+        // 如果已经处理过，跳过
+        if (isSetupDone) return;
+
+        const netBtn = getNetworkButton();
+        if (netBtn) {
+            console.log('[UserScript] Found Network button, initializing...');
             
-            // 持续强制显示
-            forceBothVisible();
-        }
-    });
+            // 1. 点击网络按钮触发加载
+            netBtn.click();
+            
+            // 2. 注入样式 (强制显示所有内容)
+            injectStyles();
 
-    const root = document.querySelector('#root');
-    if (root) {
-        observer.observe(root, {
-            childList: true,
-            attributes: true,
-            subtree: true,
-            attributeFilter: ['style', 'class']
-        });
+            // 3. 异步点击 Peak (如果存在)
+            tryClickPeak();
+
+            // 4. 标记完成
+            isSetupDone = true;
+        }
     }
+
+    // 使用 setInterval 替代 MutationObserver，避免 DOM 变更循环
+    setInterval(initLogic, SEARCH_INTERVAL);
+
 })();
