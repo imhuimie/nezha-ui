@@ -1,117 +1,46 @@
-(function () {
-    'use strict';
+// 只用CSS控制显示，JS只执行一次点击
+(function() {
+    // 1. 注入CSS样式（安全，不会触发React问题）
+    const style = document.createElement('style');
+    style.textContent = `
+        .server-info > div:nth-child(4),
+        .server-info > div:nth-child(5) {
+            display: block !important;
+        }
+        .server-info > section.flex.items-center {
+            display: none !important;
+        }
+    `;
+    document.head.appendChild(style);
 
-    let hasExecuted = false;
-    let isProcessing = false;
-
-    // 检查是否在服务器详情页
-    function checkServerPage() {
-        return /\/server\/\d+/.test(window.location.pathname);
-    }
-
-    // 查找并点击网络标签
-    function clickNetworkTab() {
+    // 2. 一次性点击网络标签加载数据
+    function clickOnce() {
         const tabs = document.querySelectorAll('.server-info-tab .cursor-pointer');
         for (const tab of tabs) {
             if (tab.textContent?.includes('网络')) {
                 tab.click();
-                return true;
+                // 点击Peak开关
+                setTimeout(() => {
+                    const sw = document.querySelector('button[role="switch"]');
+                    if (sw && sw.getAttribute('aria-checked') !== 'true') {
+                        sw.click();
+                    }
+                }, 1000);
+                return;
             }
         }
-        return false;
-    }
-
-    // 查找并点击Peak cut开关
-    function clickPeakSwitch(retryCount = 10, interval = 300) {
-        const switches = document.querySelectorAll('button[role="switch"]');
-        for (const sw of switches) {
-            const parent = sw.parentElement;
-            if (parent && parent.textContent?.includes('Peak')) {
-                if (sw.getAttribute('aria-checked') !== 'true') {
-                    sw.click();
-                }
-                return true;
-            }
-        }
-        if (retryCount > 0) {
-            setTimeout(() => clickPeakSwitch(retryCount - 1, interval), interval);
-        }
-        return false;
-    }
-
-    // 隐藏标签切换区域
-    function hideTabSection() {
-        const tabSection = document.querySelector('.server-info > section.flex.items-center');
-        if (tabSection && tabSection.style.display !== 'none') {
-            tabSection.style.display = 'none';
+        // 如果没找到，300ms后重试（最多重试20次）
+        if (clickOnce.retry < 20) {
+            clickOnce.retry++;
+            setTimeout(clickOnce, 300);
         }
     }
+    clickOnce.retry = 0;
 
-    // 同时显示详情和网络区域
-    function showBothSections() {
-        const serverInfo = document.querySelector('.server-info');
-        if (!serverInfo) return;
-
-        const children = serverInfo.children;
-        for (let i = 2; i < children.length; i++) {
-            const child = children[i];
-            if ((child.tagName === 'DIV' || child.tagName === 'SECTION') && child.style.display === 'none') {
-                child.style.display = 'block';
-            }
-        }
+    // 页面加载后执行一次
+    if (document.readyState === 'complete') {
+        setTimeout(clickOnce, 500);
+    } else {
+        window.addEventListener('load', () => setTimeout(clickOnce, 500));
     }
-
-    // 主执行函数
-    function execute() {
-        if (!checkServerPage()) return;
-        if (hasExecuted || isProcessing) return;
-
-        const serverInfo = document.querySelector('.server-info');
-        if (!serverInfo || serverInfo.children.length < 3) return;
-
-        isProcessing = true;
-
-        // 暂停observer
-        observer.disconnect();
-
-        setTimeout(() => {
-            clickNetworkTab();
-            
-            setTimeout(() => {
-                showBothSections();
-                hideTabSection();
-                hasExecuted = true;
-                isProcessing = false;
-                
-                setTimeout(() => clickPeakSwitch(10, 300), 300);
-            }, 500);
-        }, 300);
-    }
-
-    // 监听URL变化重置状态
-    let lastPath = window.location.pathname;
-    
-    const observer = new MutationObserver(() => {
-        // 检查URL是否变化
-        if (window.location.pathname !== lastPath) {
-            lastPath = window.location.pathname;
-            hasExecuted = false;
-            isProcessing = false;
-        }
-        
-        if (!hasExecuted && !isProcessing && checkServerPage()) {
-            execute();
-        }
-    });
-
-    const root = document.querySelector('#root');
-    if (root) {
-        observer.observe(root, {
-            childList: true,
-            subtree: true
-        });
-    }
-
-    // 初始执行
-    setTimeout(execute, 800);
 })();
