@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    let hasClicked = false;
-    let isServerPage = false;
+    let hasExecuted = false;
+    let isProcessing = false;
 
     // 检查是否在服务器详情页
     function checkServerPage() {
@@ -15,7 +15,6 @@
         for (const tab of tabs) {
             if (tab.textContent?.includes('网络')) {
                 tab.click();
-                console.log('[自定义脚本] 已点击网络标签');
                 return true;
             }
         }
@@ -27,15 +26,13 @@
         const switches = document.querySelectorAll('button[role="switch"]');
         for (const sw of switches) {
             const parent = sw.parentElement;
-            if (parent && parent.textContent?.includes('Peak cut')) {
+            if (parent && parent.textContent?.includes('Peak')) {
                 if (sw.getAttribute('aria-checked') !== 'true') {
                     sw.click();
-                    console.log('[自定义脚本] 已点击 Peak cut 开关');
                 }
                 return true;
             }
         }
-        
         if (retryCount > 0) {
             setTimeout(() => clickPeakSwitch(retryCount - 1, interval), interval);
         }
@@ -45,7 +42,7 @@
     // 隐藏标签切换区域
     function hideTabSection() {
         const tabSection = document.querySelector('.server-info > section.flex.items-center');
-        if (tabSection) {
+        if (tabSection && tabSection.style.display !== 'none') {
             tabSection.style.display = 'none';
         }
     }
@@ -58,7 +55,7 @@
         const children = serverInfo.children;
         for (let i = 2; i < children.length; i++) {
             const child = children[i];
-            if (child.tagName === 'DIV' || child.tagName === 'SECTION') {
+            if ((child.tagName === 'DIV' || child.tagName === 'SECTION') && child.style.display === 'none') {
                 child.style.display = 'block';
             }
         }
@@ -67,12 +64,15 @@
     // 主执行函数
     function execute() {
         if (!checkServerPage()) return;
-        if (hasClicked) return;
+        if (hasExecuted || isProcessing) return;
 
         const serverInfo = document.querySelector('.server-info');
-        if (!serverInfo) return;
+        if (!serverInfo || serverInfo.children.length < 3) return;
 
-        hasClicked = true;
+        isProcessing = true;
+
+        // 暂停observer
+        observer.disconnect();
 
         setTimeout(() => {
             clickNetworkTab();
@@ -80,21 +80,26 @@
             setTimeout(() => {
                 showBothSections();
                 hideTabSection();
-                setTimeout(() => clickPeakSwitch(15, 300), 300);
+                hasExecuted = true;
+                isProcessing = false;
+                
+                setTimeout(() => clickPeakSwitch(10, 300), 300);
             }, 500);
-        }, 500);
+        }, 300);
     }
 
-    // 监听DOM变化
+    // 监听URL变化重置状态
+    let lastPath = window.location.pathname;
+    
     const observer = new MutationObserver(() => {
-        const currentIsServerPage = checkServerPage();
-        
-        if (currentIsServerPage !== isServerPage) {
-            isServerPage = currentIsServerPage;
-            hasClicked = false;
+        // 检查URL是否变化
+        if (window.location.pathname !== lastPath) {
+            lastPath = window.location.pathname;
+            hasExecuted = false;
+            isProcessing = false;
         }
         
-        if (isServerPage && !hasClicked) {
+        if (!hasExecuted && !isProcessing && checkServerPage()) {
             execute();
         }
     });
@@ -103,11 +108,10 @@
     if (root) {
         observer.observe(root, {
             childList: true,
-            attributes: true,
-            subtree: true,
-            attributeFilter: ['style', 'class']
+            subtree: true
         });
     }
 
-    setTimeout(execute, 1000);
+    // 初始执行
+    setTimeout(execute, 800);
 })();
