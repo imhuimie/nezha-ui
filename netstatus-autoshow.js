@@ -1,105 +1,123 @@
 // ==UserScript==
-// @version      1.2
-// @description  哪吒详情页直接展示网络波动卡片 (兼容新版-修复转圈问题)
-// @author       https://www.nodeseek.com/post-349102-1
+// @name         哪吒详情页直接展示网络波动卡片
+// @version      2.0
+// @description  哪吒详情页直接展示网络波动卡片
+// @author       https://github.com/imhuimie
+// @match        https://tz.cuowu.de/*
+// @grant        none
 // ==/UserScript==
-
 (function () {
     'use strict';
-
-    // 标志位：防止重复点击和死循环
-    let isSetupDone = false;
-    let styleInjected = false;
-
-    const SEARCH_INTERVAL = 300; // 轮询检查间隔(ms)
-    
-    // 注入CSS样式：使用 CSS 强制显示内容，比 JS 循环修改 style 更高效且稳定
-    function injectStyles() {
-        if (styleInjected) return;
+    let hasClicked = false;
+    let isServerPage = false;
+    // 检查是否在服务器详情页
+    function checkServerPage() {
+        return /\/server\/\d+/.test(window.location.pathname);
+    }
+    // 查找并点击网络标签
+    function clickNetworkTab() {
+        const tabs = document.querySelectorAll('.server-info-tab .cursor-pointer');
+        for (const tab of tabs) {
+            if (tab.textContent?.includes('网络')) {
+                tab.click();
+                console.log('[UserScript] 已点击网络标签');
+                return true;
+            }
+        }
+        return false;
+    }
+    // 查找并点击Peak cut开关
+    function clickPeakSwitch(retryCount = 10, interval = 300) {
+        const switches = document.querySelectorAll('button[role="switch"]');
+        for (const sw of switches) {
+            // 检查开关旁边是否有"Peak cut"文本
+            const parent = sw.parentElement;
+            if (parent && parent.textContent?.includes('Peak cut')) {
+                // 只有在开关未激活时才点击
+                if (sw.getAttribute('aria-checked') !== 'true') {
+                    sw.click();
+                    console.log('[UserScript] 已点击 Peak cut 开关');
+                }
+                return true;
+            }
+        }
         
-        const style = document.createElement('style');
-        style.innerHTML = \`
-            /* 1. 隐藏包含“网络”按钮的 Tab 栏 (通常是第一个 Section) */
-            .server-info > section:first-of-type {
-                display: none !important;
-            }
-
-            /* 2. 强制显示所有内容卡片 */
-            /* 排除第一个 section (Tab栏)，显示其他所有 section 和 div */
-            .server-info > div,
-            .server-info > section:not(:first-of-type) {
-                display: block !important;
-                visibility: visible !important;
-                opacity: 1 !important;
-            }
-        \`;
-        document.head.appendChild(style);
-        styleInjected = true;
-        console.log('[UserScript] CSS injected');
+        if (retryCount > 0) {
+            console.log('[UserScript] 未找到 Peak cut 开关，等待重试...');
+            setTimeout(() => clickPeakSwitch(retryCount - 1, interval), interval);
+        } else {
+            console.log('[UserScript] 超过最大重试次数，未找到 Peak cut 开关');
+        }
+        return false;
     }
-
-    // 查找“网络”按钮
-    function getNetworkButton() {
-        // 查找包含“网络”或“Network”文本的可点击元素
-        const potentialButtons = document.querySelectorAll('.server-info section div.cursor-pointer, .server-info section div[class*="cursor-pointer"]');
-        for (const btn of potentialButtons) {
-            if (btn.innerText.includes('网络') || btn.innerText.includes('Network')) {
-                return btn;
+    // 隐藏标签切换区域
+    function hideTabSection() {
+        const tabSection = document.querySelector('.server-info > section.flex.items-center');
+        if (tabSection) {
+            tabSection.style.display = 'none';
+            console.log('[UserScript] 已隐藏标签切换区域');
+        }
+    }
+    // 同时显示详情和网络区域
+    function showBothSections() {
+        const serverInfo = document.querySelector('.server-info');
+        if (!serverInfo) return;
+        const children = serverInfo.children;
+        // 通常结构：[0]=头部信息, [1]=标签区, [2]=概览, [3]=详情, [4]=网络
+        // 确保第4个和第5个子元素都可见
+        for (let i = 2; i < children.length; i++) {
+            const child = children[i];
+            if (child.tagName === 'DIV' || child.tagName === 'SECTION') {
+                child.style.display = 'block';
             }
         }
-        return null;
+        console.log('[UserScript] 已设置所有区域可见');
     }
-
-    // 尝试点击 Peak 按钮 (独立逻辑，只重试有限次数)
-    function tryClickPeak(maxRetries = 20) {
-        let retries = 0;
-        const peakInterval = setInterval(() => {
-            const peakBtn = document.querySelector('#Peak');
-            if (peakBtn) {
-                peakBtn.click();
-                console.log('[UserScript] Peak button clicked');
-                clearInterval(peakInterval);
-            } else {
-                retries++;
-                if (retries >= maxRetries) clearInterval(peakInterval);
-            }
-        }, 300);
-    }
-
-    // 核心初始化逻辑
-    function initLogic() {
-        // 如果页面没有 server-info，说明可能没加载完或不在详情页
-        if (!document.querySelector('.server-info')) {
-            // 如果之前标记了完成，但现在找不到元素了（比如路由跳转），需要重置标志位
-            if (isSetupDone) {
-                 isSetupDone = false;
-                 console.log('[UserScript] Page reset detected, resetting flags');
-            }
-            return;
-        }
-
-        // 如果已经处理过，跳过
-        if (isSetupDone) return;
-
-        const netBtn = getNetworkButton();
-        if (netBtn) {
-            console.log('[UserScript] Found Network button, initializing...');
+    // 主执行函数
+    function execute() {
+        if (!checkServerPage()) return;
+        if (hasClicked) return;
+        const serverInfo = document.querySelector('.server-info');
+        if (!serverInfo) return;
+        hasClicked = true;
+        console.log('[UserScript] 检测到服务器详情页，开始执行...');
+        // 1. 先点击网络标签，触发网络内容加载
+        setTimeout(() => {
+            clickNetworkTab();
             
-            // 1. 点击网络按钮触发加载
-            netBtn.click();
-            
-            // 2. 注入样式 (强制显示所有内容)
-            injectStyles();
-
-            // 3. 异步点击 Peak (如果存在)
-            tryClickPeak();
-
-            // 4. 标记完成
-            isSetupDone = true;
-        }
+            // 2. 等待内容加载后显示所有区域
+            setTimeout(() => {
+                showBothSections();
+                hideTabSection();
+                
+                // 3. 尝试点击Peak开关
+                setTimeout(() => clickPeakSwitch(15, 300), 300);
+            }, 500);
+        }, 500);
     }
-
-    // 使用 setInterval 替代 MutationObserver，避免 DOM 变更循环
-    setInterval(initLogic, SEARCH_INTERVAL);
-
+    // 监听DOM变化
+    const observer = new MutationObserver(() => {
+        const currentIsServerPage = checkServerPage();
+        
+        // 页面切换时重置状态
+        if (currentIsServerPage !== isServerPage) {
+            isServerPage = currentIsServerPage;
+            hasClicked = false;
+        }
+        
+        if (isServerPage && !hasClicked) {
+            execute();
+        }
+    });
+    const root = document.querySelector('#root');
+    if (root) {
+        observer.observe(root, {
+            childList: true,
+            attributes: true,
+            subtree: true,
+            attributeFilter: ['style', 'class']
+        });
+    }
+    // 初始执行
+    setTimeout(execute, 1000);
 })();
